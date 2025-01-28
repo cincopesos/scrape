@@ -1,0 +1,360 @@
+#!/usr/bin/env python
+import os
+import sys
+import psutil
+import asyncio
+import hashlib
+import argparse
+from typing import List, Tuple, Dict
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
+import re
+import requests
+import xml.etree.ElementTree as ElementTree
+from urllib.parse import urlparse
+from collections import defaultdict
+from rich.console import Console
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+)
+from rich.panel import Panel
+from rich.table import Table
+from rich.tree import Tree
+
+# Initialize rich console
+console = Console()
+
+
+def get_sitemap_url(site_url):
+    return f"{site_url}/sitemap.xml"
+
+
+def get_xml_sitemap(url):
+    try:
+        with console.status("[bold blue]Fetching sitemap..."):
+            sitemap_url = get_sitemap_url(url)
+            response = requests.get(sitemap_url)
+            response.raise_for_status()
+
+            root = ElementTree.fromstring(response.content)
+            namespace = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+            urls = [loc.text for loc in root.findall(".//ns:loc", namespace)]
+            return urls
+
+    except Exception as e:
+        console.print(f"[bold red]Error fetching sitemap:[/] {e}")
+        return []
+
+
+def preview_file_structure(urls: List[str], base_dir: str) -> Tree:
+    """Generate a tree preview of the file structure that will be created."""
+    file_organizer = FileOrganizer()
+
+    # Create a tree structure for visualization
+    tree = Tree(f"[bold blue]{base_dir}[/]")
+    dir_trees = {}  # Keep track of directory trees we've created
+
+    # Sort URLs to group directories together
+    urls.sort()
+    url_count = len(urls)
+
+    # Add total URL count to the root node
+    tree.label = f"[bold blue]{base_dir}[/] ([green]{url_count} files[/])"
+
+    for url in urls:
+        subdir, filename = file_organizer.organize_path(url)
+
+        if not subdir:
+            # Root level files
+            tree.add(f"[green]{filename}[/]")
+        else:
+            # Handle nested directories
+            parts = subdir.split(os.sep)
+            current_tree = tree
+            current_path = ""
+
+            # Create or find each level of the directory tree
+            for part in parts:
+                current_path = (
+                    os.path.join(current_path, part) if current_path else part
+                )
+                if current_path not in dir_trees:
+                    dir_trees[current_path] = current_tree.add(
+                        f"[bold yellow]{part}/[/]"
+                    )
+                current_tree = dir_trees[current_path]
+
+            # Add the file to the deepest directory
+            current_tree.add(f"[green]{filename}[/]")
+
+    return tree
+
+
+class FileOrganizer:
+    def __init__(self):
+        self.used_names: Dict[str, Dict[str, str]] = defaultdict(dict)
+
+    def clean_filename(self, name: str) -> str:
+        """Convert a string into a clean filename."""
+        name = re.sub(r"[^\w\-]", " ", name)
+        name = re.sub(r"\s+", " ", name)
+        name = name.strip().title()
+        name = name.replace(" ", "_")
+        return name
+
+    def organize_path(self, url: str) -> Tuple[str, str]:
+        """
+        Organizes the URL into a logical directory structure and filename.
+        Returns a tuple of (directory_path, filename).
+        """
+        parsed = urlparse(url)
+        path_parts = [p for p in parsed.path.split("/") if p]
+
+        if not path_parts:
+            return "", "index.md"
+
+        directory_parts = []
+        for part in path_parts[:-1]:
+            clean_part = self.clean_filename(part)
+            if clean_part:
+                directory_parts.append(clean_part)
+
+        directory_path = os.path.join(*directory_parts) if directory_parts else ""
+
+        if path_parts:
+            filename_base = self.clean_filename(path_parts[-1])
+            if not filename_base:
+                filename_base = "index"
+        else:
+            filename_base = "index"
+
+        filename = f"{filename_base}.md"
+
+        if filename in self.used_names[directory_path]:
+            if url == self.used_names[directory_path][filename]:
+                return directory_path, filename
+
+            counter = 1
+            while True:
+                new_filename = f"{filename_base}_{counter}.md"
+                if new_filename not in self.used_names[directory_path]:
+                    filename = new_filename
+                    break
+                counter += 1
+
+        self.used_names[directory_path][filename] = url
+
+        return directory_path, filename
+
+
+class MemoryMonitor:
+    def __init__(self, verbosity: int = 0):
+        self.verbose = verbosity >= 3
+        self.peak_memory = 0
+        self.process = psutil.Process(os.getpid())
+
+    def log(self, prefix: str = ""):
+        if not self.verbose:
+            return
+
+        current_mem = self.process.memory_info().rss
+        if current_mem > self.peak_memory:
+            self.peak_memory = current_mem
+
+        console.print(
+            f"[bold cyan]{prefix}[/] Current Memory: [green]{current_mem // (1024 * 1024)} MB[/], "
+            f"Peak: [yellow]{self.peak_memory // (1024 * 1024)} MB[/]"
+        )
+
+    def get_peak_memory_mb(self) -> int:
+        return self.peak_memory // (1024 * 1024)
+
+
+async def crawl_parallel(
+    output_dir: str, urls: List[str], max_concurrent: int = 3, verbosity: int = 0
+):
+    console.print(Panel("[bold blue]Parallel Scraping[/]"))
+
+    os.makedirs(output_dir, exist_ok=True)
+    file_organizer = FileOrganizer()
+    memory_monitor = MemoryMonitor(verbosity=verbosity)
+
+    browser_config = BrowserConfig(
+        headless=True,
+        verbose=verbosity >= 2,
+        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"],
+    )
+    crawl_config = CrawlerRunConfig(cache_mode=CacheMode.BYPASS)
+
+    with console.status("[bold blue]Starting scraper...[/]") as status:
+        crawler = AsyncWebCrawler(config=browser_config)
+        await crawler.start()
+
+    try:
+        success_count = 0
+        fail_count = 0
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            progress_task = progress.add_task(
+                "[cyan]Scraping pages...", total=len(urls)
+            )
+
+            try:
+                for i in range(0, len(urls), max_concurrent):
+                    batch = urls[i : i + max_concurrent]
+                    tasks = []
+
+                    for j, url in enumerate(batch):
+                        session_id = f"parallel_session_{i + j}"
+                        crawl_task = crawler.arun(
+                            url=url, config=crawl_config, session_id=session_id
+                        )
+                        tasks.append(crawl_task)
+
+                    try:
+                        memory_monitor.log(prefix="→")
+                        results = await asyncio.gather(*tasks, return_exceptions=True)
+                        memory_monitor.log(prefix="←")
+
+                        for url, result in zip(batch, results):
+                            if isinstance(result, Exception):
+                                console.print(
+                                    f"[red]✗[/] Error scraping [bold]{url}[/]: {result}"
+                                )
+                                fail_count += 1
+                            elif result.success:
+                                success_count += 1
+                                subdir, filename = file_organizer.organize_path(url)
+                                full_dir = os.path.join(output_dir, subdir)
+                                os.makedirs(full_dir, exist_ok=True)
+                                file_path = os.path.join(full_dir, filename)
+
+                                if verbosity >= 1:
+                                    console.print(
+                                        f"[green]✓[/] Writing: [bold]{file_path}[/]"
+                                    )
+
+                                with open(file_path, "w", encoding="utf-8") as f:
+                                    f.write(result.markdown)
+                            else:
+                                fail_count += 1
+                                console.print(
+                                    f"[red]✗[/] Failed to scrape [bold]{url}[/]"
+                                )
+
+                            progress.advance(progress_task)
+
+                    except Exception as e:
+                        console.print(f"[red]✗[/] Batch error: [bold]{str(e)}[/]")
+                        fail_count += len(batch)
+                        progress.advance(progress_task, len(batch))
+
+            except Exception as e:
+                console.print(
+                    f"[red]✗[/] Critical error during scraping: [bold]{str(e)}[/]"
+                )
+                raise
+
+        # Create summary table
+        table = Table(title="Scrape Summary", show_header=False)
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+        table.add_row("Successfully scraped", str(success_count))
+        table.add_row("Failed", str(fail_count))
+        if verbosity >= 3:
+            table.add_row(
+                "Peak memory usage", f"{memory_monitor.get_peak_memory_mb()} MB"
+            )
+
+        console.print("\n")
+        console.print(table)
+
+    finally:
+        with console.status("[bold blue]Closing scraper...[/]"):
+            await crawler.close()
+
+
+async def main(
+    site_url: str, max_concurrent: int, verbosity: int, dry_run: bool = False
+):
+    console.print(f"\n[bold blue]🌐 Starting scraper for:[/] [bold]{site_url}[/]\n")
+
+    urls = get_xml_sitemap(site_url)
+
+    if not urls:
+        console.print(
+            "[yellow]⚠️  No sitemap found, scraping the top-level URL only.[/]"
+        )
+        urls = [site_url]
+    else:
+        console.print(f"[green]✓[/] Found [bold]{len(urls)}[/] URLs in sitemap")
+
+    domain = urlparse(site_url).netloc
+    output_folder = os.path.join(os.getcwd(), domain)
+
+    if dry_run:
+        console.print(
+            "\n[bold blue]📁 Preview of file structure that will be created:[/]"
+        )
+        tree = preview_file_structure(urls, domain)
+        console.print(tree)
+        console.print("\n[yellow]This was a dry run. No files were created.[/]")
+        return
+
+    os.makedirs(output_folder, exist_ok=True)
+    await crawl_parallel(
+        output_folder, urls, max_concurrent=max_concurrent, verbosity=verbosity
+    )
+    console.print("\n[bold green]✨ Scraping complete![/]")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="[bold blue]Parallel web scraper with organized output[/]",
+        formatter_class=lambda prog: argparse.RawDescriptionHelpFormatter(
+            prog, max_help_position=52
+        ),
+    )
+    parser.add_argument(
+        "url",
+        type=str,
+        help="The URL to scrape (must include http:// or https://)",
+    )
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=3,
+        help="Maximum number of concurrent crawlers (default: 3)",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="Increase verbosity level (-v for file names, -vv for browser output, -vvv for memory monitoring)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the file structure without performing the scrape",
+    )
+
+    args = parser.parse_args()
+
+    try:
+        asyncio.run(main(args.url, args.max_concurrent, args.verbose, args.dry_run))
+    except KeyboardInterrupt:
+        console.print("\n[bold red]Scraping interrupted by user.[/]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"\n[bold red]An error occurred:[/] {str(e)}")
+        sys.exit(1)
