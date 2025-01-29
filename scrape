@@ -319,7 +319,7 @@ async def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="[bold blue]Parallel web scraper with organized output[/]",
+        description="Parallel web scraper with organized output",
         formatter_class=lambda prog: argparse.RawDescriptionHelpFormatter(
             prog, max_help_position=52
         ),
