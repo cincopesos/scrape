@@ -15,6 +15,10 @@ interface Business {
   updated_at?: string;
   processed_at?: string;
   error_message?: string;
+  description?: string;
+  address?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 function getStatusBadge(status?: string) {
@@ -48,6 +52,7 @@ export default function DashboardPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalRecords, setTotalRecords] = useState(0);
   const [processStats, setProcessStats] = useState<any>({});
+  const [selectedBusiness, setSelectedBusiness] = useState<Business | null>(null);
   
   // Cargar datos al montar el componente
   useEffect(() => {
@@ -115,12 +120,39 @@ export default function DashboardPage() {
       
       setBusinesses(validBusinesses);
       
-      // Obtener información del proceso actual
+      // Obtener información del proceso actual y estadísticas
       const statsResponse = await fetch(`/api/extract?_t=${timestamp}`);
       if (statsResponse.ok) {
         const statsData = await statsResponse.json();
         setCurrentSitemap(statsData.currentSitemap);
-        setProcessStats(statsData.stats || {});
+        
+        // Actualizar las estadísticas correctamente
+        // El backend debería proporcionar estos valores calculados adecuadamente
+        const stats = statsData.stats || {};
+        
+        // Calcular estadísticas manualmente si es necesario
+        if (stats.withEmail === undefined || stats.withEmail === 0) {
+          // Hacer una solicitud adicional para obtener estadísticas precisas
+          try {
+            const emailStatsResponse = await fetch(`/api/stats?_t=${timestamp}`);
+            if (emailStatsResponse.ok) {
+              const emailStatsData = await emailStatsResponse.json();
+              setProcessStats({
+                ...stats,
+                withEmail: emailStatsData.emailCount || 0,
+                withDescription: emailStatsData.descriptionCount || 0,
+                withAddress: emailStatsData.addressCount || 0
+              });
+            } else {
+              setProcessStats(stats);
+            }
+          } catch (err) {
+            console.error('Error al obtener estadísticas de emails:', err);
+            setProcessStats(stats);
+          }
+        } else {
+          setProcessStats(stats);
+        }
       }
       
     } catch (err) {
@@ -190,7 +222,7 @@ export default function DashboardPage() {
       )}
       
       {/* Estadísticas */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
         <div className="bg-white rounded-lg shadow p-4 text-center">
           <div className="text-xl font-bold">{totalRecords}</div>
           <div className="text-sm text-gray-600">URLs Totales</div>
@@ -202,6 +234,10 @@ export default function DashboardPage() {
         <div className="bg-white rounded-lg shadow p-4 text-center">
           <div className="text-xl font-bold">{processStats.withEmail || 0}</div>
           <div className="text-sm text-gray-600">Con Email</div>
+        </div>
+        <div className="bg-white rounded-lg shadow p-4 text-center">
+          <div className="text-xl font-bold">{processStats.withAddress || 0}</div>
+          <div className="text-sm text-gray-600">Con Dirección</div>
         </div>
         <div className="bg-white rounded-lg shadow p-4 text-center">
           <div className="text-xl font-bold">{uniqueSitemaps.length}</div>
@@ -283,6 +319,129 @@ export default function DashboardPage() {
         </div>
       </div>
       
+      {/* Detalles completos del negocio (modal) */}
+      {selectedBusiness && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold">Detalles completos</h2>
+                <button 
+                  onClick={() => setSelectedBusiness(null)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              <div className="overflow-y-auto">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <div className="font-bold text-gray-600">URL</div>
+                    <a 
+                      href={selectedBusiness.url} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="text-blue-600 hover:underline break-all"
+                    >
+                      {selectedBusiness.url}
+                    </a>
+                  </div>
+                  <div>
+                    <div className="font-bold text-gray-600">Sitemap</div>
+                    <a 
+                      href={selectedBusiness.sitemap_url} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="text-blue-600 hover:underline break-all"
+                    >
+                      {selectedBusiness.sitemap_url || 'No disponible'}
+                    </a>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <div className="font-bold text-gray-600">Estado</div>
+                    <div>{getStatusBadge(selectedBusiness.status)}</div>
+                    {selectedBusiness.error_message && (
+                      <div className="mt-2 text-red-600">{selectedBusiness.error_message}</div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="font-bold text-gray-600">Email</div>
+                    {selectedBusiness.email ? (
+                      <a 
+                        href={`mailto:${selectedBusiness.email}`} 
+                        className="text-blue-600 hover:underline"
+                      >
+                        {selectedBusiness.email}
+                      </a>
+                    ) : 'No disponible'}
+                  </div>
+                </div>
+                
+                <div className="mb-4">
+                  <div className="font-bold text-gray-600">Título</div>
+                  <div>{selectedBusiness.title || 'No disponible'}</div>
+                </div>
+                
+                <div className="mb-4">
+                  <div className="font-bold text-gray-600">Descripción</div>
+                  <div>{selectedBusiness.description || 'No disponible'}</div>
+                </div>
+                
+                <div className="mb-4">
+                  <div className="font-bold text-gray-600">Dirección</div>
+                  <div>{selectedBusiness.address || 'No disponible'}</div>
+                </div>
+                
+                {(selectedBusiness.latitude && selectedBusiness.longitude) && (
+                  <div className="mb-4">
+                    <div className="font-bold text-gray-600">Coordenadas</div>
+                    <div>Latitud: {selectedBusiness.latitude}, Longitud: {selectedBusiness.longitude}</div>
+                  </div>
+                )}
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <div className="font-bold text-gray-600">Creado</div>
+                    <div><DateFormatter dateString={selectedBusiness.created_at} /></div>
+                  </div>
+                  <div>
+                    <div className="font-bold text-gray-600">Actualizado</div>
+                    <div>{selectedBusiness.updated_at ? <DateFormatter dateString={selectedBusiness.updated_at} /> : 'No disponible'}</div>
+                  </div>
+                  <div>
+                    <div className="font-bold text-gray-600">Procesado</div>
+                    <div>{selectedBusiness.processed_at ? <DateFormatter dateString={selectedBusiness.processed_at} /> : 'No disponible'}</div>
+                  </div>
+                </div>
+                
+                <div className="mt-6 flex justify-between">
+                  <button 
+                    onClick={() => setSelectedBusiness(null)}
+                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-800"
+                  >
+                    Cerrar
+                  </button>
+                  <a 
+                    href={selectedBusiness.url} 
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white"
+                  >
+                    Abrir sitio web
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
       {/* Tabla de datos */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="p-4 border-b border-gray-200 flex justify-between items-center">
@@ -324,7 +483,10 @@ export default function DashboardPage() {
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Estado</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Título</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Descripción</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ubicación</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fecha</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Detalles</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -379,12 +541,34 @@ export default function DashboardPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-w-xs truncate" title={business.title || ''}>
                       {business.title || '-'}
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-w-xs truncate" title={business.description || ''}>
+                      {business.description ? business.description.substring(0, 50) + (business.description.length > 50 ? '...' : '') : '-'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-w-xs truncate">
+                      {business.address ? (
+                        <span title={business.address}>{business.address.substring(0, 40) + (business.address.length > 40 ? '...' : '')}</span>
+                      ) : (
+                        '-'
+                      )}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {business.created_at ? (
                         <DateFormatter dateString={business.created_at} />
                       ) : (
                         '-'
                       )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      <button
+                        onClick={() => setSelectedBusiness(business)}
+                        className="p-1 bg-blue-100 text-blue-600 hover:bg-blue-200 rounded"
+                        title="Ver detalles completos"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                      </button>
                     </td>
                   </tr>
                 ))}

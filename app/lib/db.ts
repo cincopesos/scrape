@@ -128,30 +128,64 @@ export async function addBusinessUrl(url: string, sitemapUrl: string | null = nu
   }
 }
 
-// Actualizar datos de un negocio
-export async function updateBusinessData(url: string, data: Partial<BusinessData>): Promise<boolean> {
+// Función para actualizar datos de empresa
+export async function updateBusinessData(url: string, data: any): Promise<boolean> {
   const db = await getDb();
   
   try {
-    // Construir sentencia SQL dinámica para los campos que se actualizan
-    const fields: string[] = [];
+    // Crear un set de valores para la consulta SQL
+    const updateFields: string[] = [];
     const values: any[] = [];
     
+    // Agregar cada campo no nulo al conjunto de actualizaciones
     Object.entries(data).forEach(([key, value]) => {
-      fields.push(`${key} = ?`);
-      values.push(value);
+      if (value !== undefined) {
+        updateFields.push(`${key} = ?`);
+        values.push(value);
+      }
     });
     
-    // Siempre actualizar updated_at
-    fields.push('updated_at = CURRENT_TIMESTAMP');
+    // Si no hay campos para actualizar, retornar
+    if (updateFields.length === 0) {
+      console.log(`No hay datos para actualizar para URL: ${url}`);
+      return false;
+    }
     
-    // Agregar URL para WHERE
+    // Agregar la condición WHERE
     values.push(url);
     
-    const query = `UPDATE businesses SET ${fields.join(', ')} WHERE url = ?`;
+    // Debug: mostrar valores que se actualizarán
+    console.log(`Actualizando ${url} con valores:`, data);
+    
+    // Construir y ejecutar la consulta SQL
+    const query = `
+      UPDATE businesses
+      SET ${updateFields.join(', ')}
+      WHERE url = ?
+    `;
+    
     const result = await db.run(query, values);
     
-    return result.changes ? result.changes > 0 : false;
+    // Verificar si se actualizó algún registro
+    if (result.changes === 0) {
+      console.warn(`No se encontró la URL ${url} para actualizar`);
+      return false;
+    }
+    
+    // Verificar específicamente el campo address si está presente
+    if (data.address !== undefined) {
+      // Consultar después de la actualización para verificar
+      const updated = await db.get('SELECT address FROM businesses WHERE url = ?', [url]);
+      console.log(`Verificación de dirección para ${url}:`, {
+        direcciónAntesDeActualizar: data.address,
+        direcciónDespuésDeActualizar: updated?.address
+      });
+    }
+    
+    return true;
+  } catch (error) {
+    console.error(`Error actualizando datos para URL ${url}:`, error);
+    throw error;
   } finally {
     await db.close();
   }
