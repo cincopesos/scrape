@@ -13,6 +13,8 @@ import ssl
 import concurrent.futures
 from datetime import datetime
 import threading
+import random
+from collections import defaultdict
 
 # Evitar problemas de SSL
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -22,9 +24,19 @@ DATA_DIR = os.path.join(os.getcwd(), 'data')
 DB_PATH = os.path.join(DATA_DIR, 'business_data.sqlite')
 USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36'
 MAX_RETRIES = 3
-TIMEOUT = 10
+TIMEOUT = 15
 EMAIL_REGEX = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
 LOCK = threading.Lock()
+
+# Limitar solicitudes por dominio
+DOMAIN_RATE_LIMIT = {
+    "ueniweb.com": 1,  # 1 solicitud por segundo para ueniweb.com
+    "default": 3       # 3 solicitudes por segundo para otros dominios
+}
+
+# Diccionario para rastrear la última solicitud por dominio
+last_request_time = defaultdict(float)
+domain_locks = defaultdict(threading.Lock)
 
 def log_message(message):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -68,6 +80,15 @@ def get_pending_urls(status=None, limit=100, sitemap=None):
     
     return urls
 
+def group_urls_by_domain(urls):
+    """Agrupar URLs por dominio para controlar la tasa de solicitudes"""
+    domain_groups = defaultdict(list)
+    for url, sitemap_url in urls:
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc
+        domain_groups[domain].append((url, sitemap_url))
+    return domain_groups
+
 def update_status(url, status, **kwargs):
     """Actualizar el estado de una URL en la base de datos"""
     conn = connect_db()
@@ -88,15 +109,82 @@ def update_status(url, status, **kwargs):
     conn.commit()
     conn.close()
 
+def get_rate_limit_for_domain(domain):
+    """Obtener el límite de tasa para un dominio específico"""
+    # Comprobar si el dominio termina con alguno de los dominios en DOMAIN_RATE_LIMIT
+    for key_domain, limit in DOMAIN_RATE_LIMIT.items():
+        if domain.endswith(key_domain):
+            return limit
+    return DOMAIN_RATE_LIMIT["default"]
+
+def wait_for_rate_limit(domain):
+    """Esperar si es necesario para cumplir con los límites de tasa por dominio"""
+    with domain_locks[domain]:
+        rate_limit = get_rate_limit_for_domain(domain)
+        
+        # Calcular el tiempo que debe pasar entre solicitudes (en segundos)
+        delay_needed = 1.0 / rate_limit
+        
+        # Obtener el tiempo transcurrido desde la última solicitud
+        last_request = last_request_time[domain]
+        now = time.time()
+        time_since_last_request = now - last_request
+        
+        # Si no ha pasado suficiente tiempo, esperar
+        if time_since_last_request < delay_needed:
+            wait_time = delay_needed - time_since_last_request
+            # Añadir jitter (variación aleatoria) para evitar sincronización
+            jitter = random.uniform(0.1, 0.5)
+            total_wait = wait_time + jitter
+            log_message(f"Esperando {total_wait:.2f}s antes de solicitar {domain} (límite: {rate_limit}/s)")
+            time.sleep(total_wait)
+        
+        # Actualizar el tiempo de la última solicitud
+        last_request_time[domain] = time.time()
+
 def extract_info(url):
     """Extraer información de una página web"""
-    headers = {'User-Agent': USER_AGENT}
+    parsed_url = urlparse(url)
+    domain = parsed_url.netloc
+    
+    # Esperar según la limitación de tasa para este dominio
+    wait_for_rate_limit(domain)
+    
+    # Rotar User-Agents para parecer más naturales
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36',
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+        'Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1'
+    ]
+    
+    headers = {
+        'User-Agent': random.choice(user_agents),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Referer': 'https://www.google.com/',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Cache-Control': 'max-age=0'
+    }
     
     for attempt in range(MAX_RETRIES):
         try:
             log_message(f"Intentando acceder a: {url}")
+            
+            # Añadir un retraso exponencial entre reintentos
+            if attempt > 0:
+                backoff_time = (2 ** attempt) + random.uniform(0, 1)
+                log_message(f"Reintento {attempt+1}/{MAX_RETRIES} para {url}, esperando {backoff_time:.2f}s...")
+                time.sleep(backoff_time)
+            
             response = requests.get(url, headers=headers, timeout=TIMEOUT)
             response.raise_for_status()
+            
+            # Introducir un pequeño retraso después de cada solicitud exitosa
+            time.sleep(random.uniform(0.5, 1.5))
             
             soup = BeautifulSoup(response.text, 'html.parser')
             
@@ -261,7 +349,6 @@ def extract_info(url):
                 return {'url': url, 'error': str(e)}
             else:
                 log_message(f"Intento {attempt+1} fallido para {url}: {str(e)}. Reintentando...")
-                time.sleep(1)
         except Exception as e:
             log_message(f"Error procesando {url}: {str(e)}")
             return {'url': url, 'error': str(e)}
@@ -310,23 +397,34 @@ def process_batch(batch, args, progress_callback=None):
     successful = 0
     failed = 0
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
-        future_to_url = {executor.submit(process_url, url_data): url_data for url_data in batch}
-        for future in concurrent.futures.as_completed(future_to_url):
-            url_data = future_to_url[future]
-            try:
-                if future.result():
-                    successful += 1
-                else:
+    # Agrupar las URLs por dominio
+    domain_groups = group_urls_by_domain(batch)
+    
+    # Procesar cada grupo de dominios con su propio límite de tasa
+    for domain, urls in domain_groups.items():
+        log_message(f"Procesando grupo de {len(urls)} URLs para dominio: {domain}")
+        
+        # Usar menos workers para dominios específicos con límites más estrictos
+        workers = 1 if "ueniweb.com" in domain else min(args.workers, 2)
+        log_message(f"Usando {workers} workers para el dominio {domain}")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_url = {executor.submit(process_url, url_data): url_data for url_data in urls}
+            for future in concurrent.futures.as_completed(future_to_url):
+                url_data = future_to_url[future]
+                try:
+                    if future.result():
+                        successful += 1
+                    else:
+                        failed += 1
+                    
+                    if progress_callback:
+                        progress_callback(successful, failed)
+                except Exception as e:
+                    log_message(f"Error procesando {url_data[0]}: {str(e)}")
                     failed += 1
-                
-                if progress_callback:
-                    progress_callback(successful, failed)
-            except Exception as e:
-                log_message(f"Error procesando {url_data[0]}: {str(e)}")
-                failed += 1
-                if progress_callback:
-                    progress_callback(successful, failed)
+                    if progress_callback:
+                        progress_callback(successful, failed)
     
     return successful, failed
 
@@ -335,14 +433,15 @@ def main():
     parser.add_argument('--status', help='Filtrar por estado (pending, error, completed, processing)')
     parser.add_argument('--limit', type=int, default=100, help='Número máximo de URLs a procesar')
     parser.add_argument('--sitemap', help='Filtrar por URL de sitemap específico')
-    parser.add_argument('--workers', type=int, default=5, help='Número de trabajadores paralelos')
-    parser.add_argument('--batch-size', type=int, default=10, help='Tamaño del lote para procesar')
+    parser.add_argument('--workers', type=int, default=3, help='Número máximo de trabajadores paralelos')
+    parser.add_argument('--batch-size', type=int, default=5, help='Tamaño del lote para procesar')
+    parser.add_argument('--delay', type=float, default=1.0, help='Retraso entre lotes en segundos')
     
     args = parser.parse_args()
     
     # Imprimir parámetros para verificación
     log_message(f"Iniciando con parámetros: status={args.status}, limit={args.limit}, sitemap={args.sitemap}")
-    log_message(f"Configuración: workers={args.workers}, batch_size={args.batch_size}")
+    log_message(f"Configuración: workers={args.workers}, batch-size={args.batch_size}, delay={args.delay}")
     
     # Obtener URLs para procesar
     urls = get_pending_urls(status=args.status, limit=args.limit, sitemap=args.sitemap)
@@ -364,9 +463,18 @@ def main():
     total_failed = 0
     start_time = time.time()
     
+    # Agrupar todas las URLs por dominio antes de iniciar el procesamiento
+    domain_groups = group_urls_by_domain(urls)
+    log_message(f"URLs agrupadas por {len(domain_groups)} dominios: {', '.join(domain_groups.keys())}")
+    
+    # Mostrar la distribución de URLs por dominio
+    for domain, domain_urls in domain_groups.items():
+        log_message(f"Dominio {domain}: {len(domain_urls)} URLs")
+    
+    # Procesar las URLs en lotes pequeños
     for i in range(0, len(urls), args.batch_size):
         batch = urls[i:i + args.batch_size]
-        log_message(f"Procesando lote {i//args.batch_size + 1}/{(len(urls) + args.batch_size - 1)//args.batch_size}")
+        log_message(f"Procesando lote {i//args.batch_size + 1}/{(len(urls) + args.batch_size - 1)//args.batch_size} ({len(batch)} URLs)")
         
         def progress_callback(successful, failed):
             progress = (i + successful + failed) / len(urls) * 100
@@ -375,6 +483,12 @@ def main():
         success, fail = process_batch(batch, args, progress_callback)
         total_successful += success
         total_failed += fail
+        
+        # Descansar entre lotes para evitar sobrecarga
+        if i + args.batch_size < len(urls):
+            delay = args.delay + random.uniform(0.5, 2.0)  # Añadir variabilidad
+            log_message(f"Descansando {delay:.2f}s antes del siguiente lote...")
+            time.sleep(delay)
     
     elapsed_time = time.time() - start_time
     log_message(f"Procesamiento completado en {elapsed_time:.2f} segundos.")

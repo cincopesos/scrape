@@ -54,9 +54,10 @@ export async function POST(request: NextRequest) {
       args.push('--sitemap', sitemap);
     }
     
-    // Configurar paralelismo
-    args.push('--workers', '5');
-    args.push('--batch-size', '10');
+    // Configurar paralelismo y límites para evitar bloqueos
+    args.push('--workers', '2');
+    args.push('--batch-size', '3');
+    args.push('--delay', '2.0');
     
     // Marcar como procesando
     isProcessing = true;
