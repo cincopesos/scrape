@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import os
 import sys
 import psutil
@@ -28,25 +28,81 @@ from rich.tree import Tree
 console = Console()
 
 
-def get_sitemap_url(site_url):
-    return f"{site_url}/sitemap.xml"
-
-
-def get_xml_sitemap(url):
+async def fetch_url_content(url: str) -> bytes | None:
+    """Asynchronously fetches content from a URL."""
     try:
-        with console.status("[bold blue]Fetching sitemap..."):
-            sitemap_url = get_sitemap_url(url)
-            response = requests.get(sitemap_url)
-            response.raise_for_status()
+        # Use requests for synchronous fetching within an async context
+        # In a real-world high-performance scenario, an async HTTP client like aiohttp or httpx would be better
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, requests.get, url, {"timeout": 10}) # Added timeout
+        response.raise_for_status()
+        return response.content
+    except requests.RequestException as e:
+        console.print(f"[yellow]Warning:[/] Failed to fetch {url}: {e}")
+        return None
 
-            root = ElementTree.fromstring(response.content)
-            namespace = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-            urls = [loc.text for loc in root.findall(".//ns:loc", namespace)]
-            return urls
 
-    except Exception as e:
-        console.print(f"[bold red]Error fetching sitemap:[/] {e}")
-        return []
+async def get_all_urls_from_sitemap(initial_sitemap_url: str) -> List[str]:
+    """
+    Recursively fetches and parses sitemaps (XML) to extract all non-sitemap URLs.
+    """
+    all_final_urls = set()
+    sitemaps_to_process = [initial_sitemap_url]
+    processed_sitemaps = set()
+    namespace = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+
+    with console.status("[bold blue]Processing sitemaps...", spinner="dots") as status:
+        while sitemaps_to_process:
+            current_sitemap_url = sitemaps_to_process.pop(0)
+            if current_sitemap_url in processed_sitemaps:
+                continue
+
+            status.update(f"[bold blue]Processing sitemap: {current_sitemap_url}[/]")
+            processed_sitemaps.add(current_sitemap_url)
+
+            content = await fetch_url_content(current_sitemap_url)
+            if not content:
+                continue # Skip if fetch failed
+
+            try:
+                root = ElementTree.fromstring(content)
+                # Check if it's a sitemap index or a URL set
+                if root.tag.endswith("sitemapindex"):
+                    # Find sitemap locations in a sitemap index
+                    sitemap_locs = [loc.text for loc in root.findall(".//ns:loc", namespace)]
+                    for loc in sitemap_locs:
+                        if loc not in processed_sitemaps and loc not in sitemaps_to_process:
+                             sitemaps_to_process.append(loc)
+                elif root.tag.endswith("urlset"):
+                     # Find URL locations in a URL set
+                    url_locs = [loc.text for loc in root.findall(".//ns:loc", namespace)]
+                    for loc in url_locs:
+                         if loc.lower().endswith(".xml"): # It's another sitemap
+                              if loc not in processed_sitemaps and loc not in sitemaps_to_process:
+                                   sitemaps_to_process.append(loc)
+                         else: # It's a final URL
+                              all_final_urls.add(loc)
+                else:
+                     console.print(f"[yellow]Warning:[/] Unknown root tag '{root.tag}' in {current_sitemap_url}")
+
+            except ElementTree.ParseError as e:
+                console.print(f"[red]Error:[/] Failed to parse XML from {current_sitemap_url}: {e}")
+            except Exception as e:
+                 console.print(f"[red]Error:[/] Unexpected error processing {current_sitemap_url}: {e}")
+
+
+    return list(all_final_urls)
+
+
+def get_sitemap_url(site_url):
+    # Ensure the base URL has a scheme
+    if not site_url.startswith(('http://', 'https://')):
+        site_url = 'https://' + site_url # Default to https
+
+    # Remove trailing slash if present for consistency
+    if site_url.endswith('/'):
+        site_url = site_url[:-1]
+    return f"{site_url}/sitemap.xml"
 
 
 def preview_file_structure(urls: List[str], base_dir: str) -> Tree:
@@ -288,31 +344,66 @@ async def main(
 ):
     console.print(f"\n[bold blue]🌐 Starting scraper for:[/] [bold]{site_url}[/]\n")
 
-    urls = get_xml_sitemap(site_url)
-
-    if not urls:
-        console.print(
-            "[yellow]⚠️  No sitemap found, scraping the top-level URL only.[/]"
-        )
-        urls = [site_url]
+    # Determine the initial sitemap URL correctly
+    if site_url.lower().endswith('.xml'):
+        initial_sitemap_url = site_url
+        # Extract base domain for output folder naming if input is a sitemap URL
+        parsed_uri = urlparse(site_url)
+        # Attempt to get a base domain - might need refinement for complex URLs
+        domain_for_folder = parsed_uri.netloc 
     else:
-        console.print(f"[green]✓[/] Found [bold]{len(urls)}[/] URLs in sitemap")
+        initial_sitemap_url = get_sitemap_url(site_url)
+        domain_for_folder = urlparse(site_url).netloc # Use the provided domain for the folder
 
-    domain = urlparse(site_url).netloc
-    output_folder = os.path.join(os.getcwd(), domain)
+    all_urls = await get_all_urls_from_sitemap(initial_sitemap_url)
+
+    if not all_urls:
+        console.print(
+            "[yellow]⚠️  No URLs found in sitemap(s), scraping the top-level URL only.[/]"
+        )
+        # Ensure the original URL is properly formatted if used as fallback
+        parsed_root = urlparse(site_url)
+        root_url = f"{parsed_root.scheme}://{parsed_root.netloc}/"
+        urls_to_process = [root_url]
+    else:
+        console.print(f"[green]✓[/] Found [bold]{len(all_urls)}[/] total URLs in sitemap(s).")
+        # Extract unique root URLs
+        root_urls = set()
+        for url in all_urls:
+            try:
+                parsed = urlparse(url)
+                # Ensure scheme and netloc are present
+                if parsed.scheme and parsed.netloc:
+                    root_url = f"{parsed.scheme}://{parsed.netloc}/"
+                    root_urls.add(root_url)
+                else:
+                    console.print(f"[yellow]Warning:[/] Skipping invalid URL: {url}")
+
+            except Exception as e:
+                 console.print(f"[yellow]Warning:[/] Could not parse URL '{url}': {e}")
+
+
+        urls_to_process = sorted(list(root_urls)) # Sort for consistent output
+        console.print(f"[green]✓[/] Extracted [bold]{len(urls_to_process)}[/] unique root URLs for scraping.")
+
+
+    # Use the determined domain for the output folder name
+    output_folder = os.path.join(os.getcwd(), domain_for_folder)
 
     if dry_run:
         console.print(
-            "\n[bold blue]📁 Preview of file structure that will be created:[/]"
+            "\n[bold blue]📁 Preview of file structure for root URLs:[/]"
         )
-        tree = preview_file_structure(urls, domain)
+        # Preview based on the processed root URLs
+        tree = preview_file_structure(urls_to_process, domain_for_folder)
         console.print(tree)
         console.print("\n[yellow]This was a dry run. No files were created.[/]")
         return
 
     os.makedirs(output_folder, exist_ok=True)
+    # Crawl the processed root URLs
     await crawl_parallel(
-        output_folder, urls, max_concurrent=max_concurrent, verbosity=verbosity
+        output_folder, urls_to_process, max_concurrent=max_concurrent, verbosity=verbosity
     )
     console.print("\n[bold green]✨ Scraping complete![/]")
 

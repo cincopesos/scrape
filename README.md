@@ -1,140 +1,36 @@
-# Web Scraper
+This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
-A high-performance parallel web scraper that converts websites into organized Markdown files. Built with Python and `crawl4ai`, `requests`, `psutil`, `rich`, and `asyncio`, this tool efficiently processes websites by leveraging their sitemaps and supports concurrent scraping with built-in memory monitoring.
+## Getting Started
 
-## Features
-
-- 🚀 Parallel scraping with configurable concurrency
-- 📑 Automatic sitemap detection and processing
-- 📁 Organized output with clean directory structure
-- 💾 Memory-efficient with built-in monitoring
-- 🌐 Browser-based scraping using crawl4ai
-- 📊 Progress tracking and detailed logging
-- 🔍 Preview mode with dry-run option
-
-## Requirements
-
-- Python 3.7+
-- crawl4ai
-- rich
-- psutil
-- requests
-
-## Installation
-
-1. Clone the repository:
+First, run the development server:
 
 ```bash
-git clone https://github.com/rkabrick/scrape.git
-cd web-scraper
+npm run dev
+# or
+yarn dev
+# or
+pnpm dev
+# or
+bun dev
 ```
 
-2. Install dependencies:
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-```bash
-pip install -r requirements.txt
-```
+You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
-## Usage
+This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
-Basic usage:
+## Learn More
 
-```bash
-python scrape https://example.com
-```
+To learn more about Next.js, take a look at the following resources:
 
-### Command Line Options
+- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
+- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 
-```bash
-scrape [-h] [--max-concurrent MAX_CONCURRENT] [-v] [--dry-run] url
-```
+You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
-Arguments:
+## Deploy on Vercel
 
-- `url`: The target URL to scrape (must include http:// or https://)
-- `--max-concurrent`: Maximum number of concurrent scrapers (default: 3)
-- `-v`: Increase verbosity level
-  - `-v`: Show file names
-  - `-vv`: Show browser output
-  - `-vvv`: Show memory monitoring
-- `--dry-run`: Preview the file structure without performing the scrape
+The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
-### Examples
-
-1. Basic scraping:
-
-```bash
-scrape https://example.com
-```
-
-2. Scraping with increased concurrency:
-
-```bash
-scrape --max-concurrent 5 https://example.com
-```
-
-3. Preview mode with file structure:
-
-```bash
-scrape --dry-run https://example.com
-```
-
-4. Verbose output with memory monitoring:
-
-```bash
-scrape -vvv https://example.com
-```
-
-## Output Structure
-
-The scraper creates an organized directory structure based on the website's URL paths. For example:
-
-```
-example.com/
-├── index.md
-├── about/
-│   └── index.md
-├── blog/
-│   ├── post1.md
-│   └── post2.md
-└── products/
-    ├── category1/
-    │   └── item1.md
-    └── category2/
-        └── item2.md
-```
-
-## Features in Detail
-
-### Sitemap Processing
-
-- Automatically detects and processes XML sitemaps
-- Falls back to single URL processing if no sitemap is found
-- Supports both simple and nested sitemap structures
-
-### Memory Management
-
-- Built-in memory monitoring for resource-intensive operations
-- Configurable concurrent scraping to balance performance and resource usage
-- Automatic cleanup of browser instances
-
-### File Organization
-
-- Intelligent path handling and file naming
-- Duplicate file name resolution
-- Clean, SEO-friendly file structure
-- Markdown output for compatibility
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Built with [crawl4ai](https://github.com/example/crawl4ai) for reliable web scraping
-- Uses [rich](https://github.com/Textualize/rich) for beautiful terminal output
-- Memory monitoring powered by [psutil](https://github.com/giampaolo/psutil)
-
-## Support
-
-For issues, questions, or contributions, please open an issue in the GitHub repository.
+Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
