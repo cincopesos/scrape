@@ -20,15 +20,21 @@ export default function ReprocessingTool() {
         const response = await fetch(`/api/sitemaps?_t=${Date.now()}`);
         if (response.ok) {
           const data = await response.json();
+          let sitemapUrls: string[] = [];
+
           // Si data es un array, buscar la propiedad url en cada elemento
           if (Array.isArray(data)) {
-            const uniqueSitemaps = [...new Set(data.map((item: any) => item.url))];
-            setSitemaps(uniqueSitemaps);
-          } else if (data.sitemaps && Array.isArray(data.sitemaps)) {
+            sitemapUrls = data
+              .map((item: any) => item?.url) // Safely access url
+              .filter((url: any): url is string => typeof url === 'string' && url.length > 0); // Ensure it's a non-empty string
+          } else if (data?.sitemaps && Array.isArray(data.sitemaps)) {
             // Si data tiene una propiedad sitemaps que es un array
-            const uniqueSitemaps = [...new Set(data.sitemaps.map((url: string) => url))];
-            setSitemaps(uniqueSitemaps);
+            sitemapUrls = data.sitemaps
+              .filter((url: any): url is string => typeof url === 'string' && url.length > 0); // Ensure it's a non-empty string
           }
+
+          const uniqueSitemaps: string[] = [...new Set(sitemapUrls)];
+          setSitemaps(uniqueSitemaps);
           console.log("Sitemaps cargados:", data);
         }
       } catch (err) {
@@ -71,8 +77,8 @@ export default function ReprocessingTool() {
 
     try {
       // Validar el límite
-      if (limit <= 0 || limit > 1000) {
-        setError('El límite debe estar entre 1 y 1000');
+      if (limit <= 0 || limit > 15000) {
+        setError('El límite debe estar entre 1 y 15000');
         return;
       }
 
@@ -170,7 +176,7 @@ export default function ReprocessingTool() {
             onChange={(e) => setLimit(parseInt(e.target.value) || 0)}
             disabled={isProcessing}
             min={1}
-            max={1000}
+            max={15000}
             className="w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
           />
         </div>
