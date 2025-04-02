@@ -32,9 +32,9 @@ export async function POST(request: NextRequest) {
     }
     
     const numLimit = parseInt(limit as string) || 100;
-    if (numLimit <= 0 || numLimit > 1000) {
+    if (numLimit <= 0 || numLimit > 15000) {
       return NextResponse.json(
-        { error: 'El límite debe estar entre 1 y 1000' },
+        { error: 'El límite debe estar entre 1 y 15000' },
         { status: 400 }
       );
     }
