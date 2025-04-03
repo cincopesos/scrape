@@ -183,6 +183,20 @@ export default function DashboardPage() {
     return true;
   });
   
+  // NUEVA FUNCIÓN: Manejar Exportación CSV
+  const handleExportCsv = () => {
+    const params = new URLSearchParams();
+    if (sitemapFilter !== 'all') {
+      params.set('sitemap', sitemapFilter);
+    }
+    
+    const exportUrl = `/api/export/csv?${params.toString()}`;
+    console.log('Triggering CSV export:', exportUrl);
+    
+    // Trigger download by navigating to the URL
+    window.location.href = exportUrl;
+  };
+  
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="flex justify-between items-center mb-6">
@@ -252,7 +266,7 @@ export default function DashboardPage() {
       {/* Filtros */}
       <div className="bg-white rounded-lg shadow mb-6 p-4">
         <h2 className="text-lg font-bold mb-3">Filtros</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
           <div>
             <label htmlFor="status-filter" className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
             <select 
@@ -315,6 +329,19 @@ export default function DashboardPage() {
                 </svg>
               </button>
             </div>
+          </div>
+          
+          <div className="md:col-start-4">
+            <button
+              onClick={handleExportCsv}
+              disabled={loading}
+              className="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Exportar CSV
+            </button>
           </div>
         </div>
       </div>

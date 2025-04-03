@@ -240,6 +240,32 @@ export async function getBusinesses({
   }
 }
 
+// Obtener negocios filtrados para exportar (sin límite)
+export async function getBusinessesForExport({ 
+  sitemap_url 
+}: { 
+  sitemap_url?: string 
+} = {}): Promise<any[]> {
+  const db = await getDb();
+  
+  try {
+    let query = 'SELECT url, sitemap_url, status, email, title, description, address, created_at, processed_at FROM businesses'; // Seleccionar columnas relevantes
+    const params: any[] = [];
+    
+    if (sitemap_url) {
+      query += ' WHERE sitemap_url = ?';
+      params.push(sitemap_url);
+    }
+    
+    query += ' ORDER BY created_at DESC'; // Ordenar para consistencia
+    
+    console.log(`Export Query: ${query}, Params: ${params}`); // Log para depuración
+    return await db.all(query, params);
+  } finally {
+    await db.close();
+  }
+}
+
 // Obtener estadísticas de negocios
 export async function getBusinessStats(): Promise<{ 
   total: number, 
